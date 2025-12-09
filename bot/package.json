@@ -1,0 +1,21 @@
+{
+  "name": "google-cert-bot",
+  "version": "1.0.0",
+  "description": "Off-chain bot that fetches Google certs and publishes to Arbitrum via Wormhole",
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "publish": "tsx src/publish-snapshot.ts",
+    "watch": "tsx watch src/index.ts"
+  },
+  "dependencies": {
+    "axios": "^1.6.2",
+    "ethers": "^6.9.0",
+    "dotenv": "^16.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "tsx": "^4.6.0",
+    "typescript": "^5.3.0"
+  }
+}

@@ -1,0 +1,32 @@
+# Dependencies
+node_modules/
+target/
+
+# Build outputs
+dist/
+out/
+artifacts/
+cache/
+typechain-types/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# NEAR
+neardev/
