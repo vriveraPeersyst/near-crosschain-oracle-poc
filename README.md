@@ -1,74 +1,101 @@
 # Google Cert Oracle POC
 
-A proof-of-concept that bridges Google's Firebase/Identity Platform X.509 certificates from Arbitrum to NEAR using Wormhole.
+A proof-of-concept that bridges Google's Firebase/Identity Platform X.509 certificates from Arbitrum to NEAR using Wormhole, enabling **trustless JWT verification on NEAR**.
+
+## Why This Exists
+
+Google rotates their OAuth signing certificates every ~7 days. To verify Google-signed JWTs (Firebase Auth, Google Identity) on-chain, smart contracts need access to these certificates. This oracle:
+
+1. **Fetches** Google's public X.509 certificates (no API key needed - public endpoint)
+2. **Publishes** them to Arbitrum via a Wormhole-enabled contract
+3. **Bridges** the data trustlessly to NEAR via Wormhole guardian signatures
+4. **Verifies** the VAA on-chain using `wormhole.wormhole.testnet` before storing
 
 ## Architecture
 
 ```
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│   Google APIs   │     │    Wormhole     │     │      NEAR       │
-│                 │     │    Guardians    │     │                 │
-│  X.509 Certs    │     │                 │     │  Oracle Contract│
-└────────┬────────┘     └────────┬────────┘     └────────▲────────┘
-         │                       │                       │
-         │ 1. Fetch              │ 3. Sign VAA          │ 5. Submit
-         ▼                       │                       │
-┌─────────────────┐     ┌────────┴────────┐     ┌────────┴────────┐
-│   Off-chain     │────▶│    Arbitrum     │     │    Wormhole     │
-│      Bot        │     │    Emitter      │────▶│    Relayer      │
-│                 │ 2.  │   (Wormhole)    │ 4.  │                 │
-└─────────────────┘     └─────────────────┘     └─────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              TRUSTLESS FLOW                                  │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────────────┐
+│   Google    │    │   Arbitrum  │    │  Wormhole   │    │        NEAR         │
+│   APIs      │    │   Sepolia   │    │  Guardians  │    │                     │
+│             │    │             │    │  (19 nodes) │    │  ┌───────────────┐  │
+│  X.509      │    │  Emitter    │    │             │    │  │ wormhole.     │  │
+│  Certs      │    │  Contract   │    │  Sign VAA   │    │  │ wormhole.     │  │
+│  (public)   │    │             │    │             │    │  │ testnet       │  │
+└──────┬──────┘    └──────┬──────┘    └──────┬──────┘    │  └───────┬───────┘  │
+       │                  │                  │           │          │          │
+       │ 1. Fetch         │ 2. Emit          │ 3. Sign   │          │ verify   │
+       ▼                  │    Message       │    VAA    │          ▼          │
+┌──────────────┐          │                  │           │  ┌───────────────┐  │
+│     Bot      │──────────┘                  │           │  │ GoogleCert    │  │
+│  (cron/manual)                             │           │  │ Oracle        │  │
+└──────────────┘                             │           │  │ Contract      │  │
+                                             │           │  └───────▲───────┘  │
+┌──────────────┐                             │           │          │          │
+│   Relayer    │◄────────────────────────────┘           │          │          │
+│              │─────────────────────────────────────────┼──────────┘          │
+└──────────────┘         4. Submit VAA                   │   5. Store if valid │
+                                                         └─────────────────────┘
 ```
 
-### Flow
+### Security Model
 
-1. **Bot** fetches Google X.509 certificates from `googleapis.com`
-2. **Bot** calls `publishGoogleSnapshot()` on Arbitrum's `GoogleCertEmitter`
-3. **Wormhole Guardians** observe the message and create a signed VAA
-4. **Relayer** fetches the VAA from Wormholescan API
-5. **Relayer** submits the payload to NEAR's `GoogleCertOracle`
+| Component | Trust Level | Notes |
+|-----------|-------------|-------|
+| Google Certs | Public | Anyone can fetch from `googleapis.com` |
+| Bot | **Untrusted** | Anyone can trigger, data is verified on-chain |
+| Wormhole | Decentralized | 19 guardian nodes must sign (13/19 quorum) |
+| NEAR Contract | **Trustless** | Verifies VAA signatures via `wormhole.wormhole.testnet` |
+| Relayer | **Untrusted** | Just submits data, can't forge signatures |
+
+**Key insight**: The bot and relayer are permissionless - anyone can run them. Security comes from Wormhole guardian signatures verified on NEAR.
 
 ## Project Structure
 
 ```
 near-oracle-poc/
-├── arbitrum/           # Solidity contract + Hardhat
+├── arbitrum/           # Solidity Wormhole emitter
 │   ├── contracts/
 │   │   └── GoogleCertEmitter.sol
-│   ├── scripts/
-│   │   └── deploy.ts
-│   └── hardhat.config.ts
+│   └── scripts/deploy.ts
 │
-├── bot/                # Off-chain bot (fetches & publishes)
+├── bot/                # Fetches Google certs & publishes to Arbitrum
 │   └── src/
-│       ├── index.ts    # Continuous polling mode
-│       └── publish-snapshot.ts
+│       ├── index.ts           # Continuous polling (checks for changes)
+│       └── publish-snapshot.ts # One-shot publish
 │
-├── relayer/            # Wormhole → NEAR relayer
+├── relayer/            # Bridges VAAs from Wormhole to NEAR
 │   └── src/
-│       ├── index.ts    # Watch mode
+│       ├── index.ts    # Watch mode (auto-relay new VAAs)
 │       └── relay.ts    # Core relay logic
 │
-├── near-contract/      # Rust NEAR contract
-│   ├── src/
-│   │   └── lib.rs
-│   ├── build.sh
-│   └── deploy.sh
+├── near-contract/      # NEAR oracle with Wormhole verification
+│   └── src/lib.rs      # Verifies VAA via wormhole.wormhole.testnet
 │
-└── chainlink-adapter/  # Chainlink External Adapter
-    └── src/
-        ├── index.ts    # Express server
-        └── test.ts     # Test script
+└── chainlink-adapter/  # (NOT USED) - See "Future: Chainlink Automation"
 ```
+
+> **Note**: The `chainlink-adapter/` folder exists but is not used in the current implementation. Since Google's certificate endpoint is public (no API key needed), we don't need Chainlink's external adapter pattern. See "Future: Chainlink Automation" section for how Chainlink could automate the refresh cycle.
+
+## Deployed Contracts (Testnet)
+
+| Network | Contract | Address |
+|---------|----------|---------|
+| Arbitrum Sepolia | GoogleCertEmitter | `0x62E14A87805CCd1AAA223347cbc35b64CbF02d63` |
+| Arbitrum Sepolia | Wormhole Core | `0x6b9C8671cdDC8dEab9c719bB87cBd3e782bA6a35` |
+| NEAR Testnet | GoogleCertOracle | `ff94854f6edb59ea4f762f10899cc29ed9d8c37245a935a8673a166bcc4a9856` |
+| NEAR Testnet | Wormhole Core | `wormhole.wormhole.testnet` |
 
 ## Quick Start
 
 ### Prerequisites
 
 - Node.js 18+
-- Rust + `wasm32-unknown-unknown` target
+- Rust 1.86 + `wasm32-unknown-unknown` target
 - NEAR CLI (`npm install -g near-cli`)
-- Hardhat (`npm install -g hardhat`)
 
 ### 1. Deploy Arbitrum Contract
 
@@ -76,183 +103,177 @@ near-oracle-poc/
 cd arbitrum
 npm install
 cp .env.example .env
-# Edit .env with your private key and RPC URL
+# Edit .env with your private key
 
-# Deploy to Arbitrum Sepolia (testnet)
-npm run deploy:sepolia
-
-# Or mainnet
-npm run deploy:arbitrum
+npx hardhat run scripts/deploy.ts --network arbitrumSepolia
 ```
 
 ### 2. Deploy NEAR Contract
 
 ```bash
 cd near-contract
-
-# Add wasm target if needed
+rustup override set 1.86  # Required for NEAR VM compatibility
 rustup target add wasm32-unknown-unknown
+cargo near build non-reproducible-wasm --no-abi
 
-# Build
-chmod +x build.sh
-./build.sh
-
-# Deploy (edit deploy.sh with your account info first)
-chmod +x deploy.sh
-./deploy.sh
+# Deploy and initialize
+NEAR_ENV=testnet near deploy <your-account> ./target/near/google_cert_oracle.wasm
+NEAR_ENV=testnet near call <your-account> new '{"owner": "<your-account>", "trusted_emitter": "0x62E14A87805CCd1AAA223347cbc35b64CbF02d63"}' --accountId <your-account>
 ```
 
-### 3. Run the Bot
+### 3. Publish Certificates (Bot)
 
 ```bash
 cd bot
 npm install
 cp .env.example .env
-# Edit .env with:
-# - ARBITRUM_RPC_URL
-# - PRIVATE_KEY (owner of GoogleCertEmitter)
-# - EMITTER_ADDRESS (deployed contract address)
+# Edit .env with Arbitrum RPC, private key, emitter address
 
 # One-shot publish
 npm run publish
 
-# Or continuous polling
+# Or continuous mode (checks every hour, publishes on change)
 npm start
 ```
 
-### 4. Run the Relayer
+### 4. Relay to NEAR
 
 ```bash
 cd relayer
 npm install
 cp .env.example .env
-# Edit .env with:
-# - NEAR credentials
-# - NEAR_CONTRACT_ID
-# - EMITTER_ADDRESS
+# Edit .env with NEAR credentials and emitter address
 
-# Relay specific VAA by sequence
-npm run relay -- relay 123
+# Relay specific VAA
+npm run relay -- relay <sequence-number>
 
-# Or watch mode (auto-relay)
+# Or watch mode (auto-relay new VAAs)
 npm start
 ```
 
-### 5. (Optional) Run Chainlink Adapter
+## E2E Test Results
 
-If you want Chainlink nodes to fetch Google certs:
+Successfully tested on December 9, 2025:
 
-```bash
-cd chainlink-adapter
-npm install
-npm start
-# Adapter runs on http://localhost:8080
+| Step | Transaction | Details |
+|------|-------------|---------|
+| 1. Bot → Arbitrum | [`0x010de53b...`](https://sepolia.arbiscan.io/tx/0x010de53b1107fa45988520e34b37ac256901551e42751ebd93ecc1c0ef4b5900) | Published 2 Google certs |
+| 2. Wormhole Signs | Sequence 1 | 19 guardians signed VAA |
+| 3. Relay → NEAR | [`2vgDH9W8...`](https://testnet.nearblocks.io/txns/2vgDH9W8ZudN7jBoQY1CvMo5k5ux9HyTQCKQEpQ5R8GE) | VAA verified on-chain ✓ |
 
-# Test it
-npm test
+Logs from NEAR transaction:
 ```
-
-## Chainlink Integration
-
-The `chainlink-adapter/` provides a standard [Chainlink External Adapter](https://docs.chain.link/chainlink-nodes/external-adapters/developers) that any Chainlink node can use:
-
+Log: Verifying VAA: chain=10003, emitter=00000000000000000000000062e14a87805ccd1aaa223347cbc35b64cbf02d63, sequence=1
+Log: wormhole/src/lib.rs#371: vaa_verify
+Log: VAA verified by guardian set 0
+Log: Snapshot #1 submitted via Wormhole VAA
 ```
-POST http://localhost:8080/
-{
-  "id": "job-123",
-  "data": { "format": "hash" }  // or "json" or "bytes"
-}
-```
-
-**Formats:**
-- `json` - Full certificate data with metadata
-- `hash` - SHA256 hash (32 bytes) - cheapest on-chain
-- `bytes` - Hex-encoded JSON for direct storage
-
-See `chainlink-adapter/README.md` for job spec examples.
-
-## Contract Addresses
-
-### Wormhole Core (Official)
-
-| Network          | Address                                      |
-|------------------|----------------------------------------------|
-| Arbitrum Mainnet | `0xa5f208e072434bC67592E4C49C1B991BA79BCA46` |
-| Arbitrum Sepolia | `0x6b9C8671cdDC8dEab9c719bB87cBd3e5c44Be9bF` |
 
 ## Reading Certificates from NEAR
-
-Once deployed, any dApp can read the Google certs:
 
 ### NEAR CLI
 
 ```bash
-near view google-cert-oracle.testnet get_snapshot '{}'
+NEAR_ENV=testnet near view ff94854f6edb59ea4f762f10899cc29ed9d8c37245a935a8673a166bcc4a9856 get_snapshot '{}'
 ```
 
-### JavaScript/TypeScript
+### JavaScript
 
 ```typescript
-import { connect, keyStores } from "near-api-js";
-
-const near = await connect({
-  networkId: "testnet",
-  nodeUrl: "https://rpc.testnet.near.org",
-  keyStore: new keyStores.InMemoryKeyStore(),
-});
-
-const account = await near.account("any-account.testnet");
 const snapshot = await account.viewFunction({
-  contractId: "google-cert-oracle.testnet",
+  contractId: "ff94854f6edb59ea4f762f10899cc29ed9d8c37245a935a8673a166bcc4a9856",
   methodName: "get_snapshot",
-  args: {},
 });
 
-console.log(JSON.parse(snapshot));
+const certs = JSON.parse(snapshot);
 // {
 //   "3811b07f28b841f4b49e482585fd66d55e38db5d": "-----BEGIN CERTIFICATE-----\n...",
 //   "951891911076054344e15e256425bb425eeb3a5c": "-----BEGIN CERTIFICATE-----\n..."
 // }
 ```
 
-### Rust (NEAR Contract)
+## Future: Chainlink Automation
 
-```rust
-use near_sdk::ext_contract;
+Google rotates certificates every ~7 days. To fully automate refreshes, you could use **Chainlink Automation** (formerly Keepers):
 
-#[ext_contract(ext_oracle)]
-trait GoogleCertOracle {
-    fn get_snapshot(&self) -> String;
+### Option 1: Time-based Automation
+
+```solidity
+// Add to GoogleCertEmitter.sol
+import "@chainlink/contracts/src/v0.8/automation/AutomationCompatible.sol";
+
+contract GoogleCertEmitter is AutomationCompatibleInterface {
+    uint256 public lastUpdate;
+    uint256 public constant UPDATE_INTERVAL = 7 days;
+    
+    function checkUpkeep(bytes calldata) external view override returns (bool upkeepNeeded, bytes memory) {
+        upkeepNeeded = (block.timestamp - lastUpdate) > UPDATE_INTERVAL;
+    }
+    
+    function performUpkeep(bytes calldata) external override {
+        // Called by Chainlink Automation every 7 days
+        // Fetch certs via Chainlink Functions and publish
+        lastUpdate = block.timestamp;
+    }
 }
-
-// In your contract:
-ext_oracle::ext("google-cert-oracle.near".parse().unwrap())
-    .get_snapshot()
-    .then(Self::ext(env::current_account_id()).handle_certs_callback())
 ```
 
-## Security Notes
+### Option 2: Chainlink Functions (fetch + publish in one tx)
 
-⚠️ **POC Warning**: This is a proof-of-concept with a **trusted relayer** model.
+```javascript
+// Chainlink Functions source code
+const response = await Functions.makeHttpRequest({
+  url: "https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com"
+});
+return Functions.encodeString(JSON.stringify(response.data));
+```
 
-In production, you should:
+This would:
+1. **Chainlink Automation** triggers every 7 days
+2. **Chainlink Functions** fetches Google certs (no API key needed)
+3. **GoogleCertEmitter** receives data and emits Wormhole message
+4. **Relayer** (or another Automation job) submits to NEAR
 
-1. **Verify VAAs on-chain**: Use NEAR's `wormhole_crypto.near` contract to verify guardian signatures
-2. **Add rate limiting**: Prevent spam/DoS attacks
-3. **Multi-sig ownership**: Don't use a single EOA as owner
-4. **Circuit breakers**: Add pause functionality for emergencies
+### Why We Don't Need a Chainlink Adapter
 
-## Costs
+The `chainlink-adapter/` pattern is for when Chainlink nodes need to fetch from authenticated APIs. Since Google's certificate endpoint is:
+- ✅ Public (no authentication)
+- ✅ Rate-limit friendly
+- ✅ Stable URL
 
-| Operation | Estimated Cost |
-|-----------|----------------|
-| Arbitrum publish | ~0.001 ETH (gas) + ~0.0001 ETH (Wormhole fee) |
-| NEAR submit | ~0.001 NEAR |
+We can use **Chainlink Functions** directly to fetch and publish, making the external adapter unnecessary.
+
+## Cost Estimates
+
+| Operation | Network | Cost |
+|-----------|---------|------|
+| Publish snapshot | Arbitrum Sepolia | ~0.0001 ETH |
+| Relay VAA | NEAR Testnet | ~0.01 NEAR |
+| Chainlink Automation | Arbitrum | ~0.1 LINK/month |
+
+## Security Considerations
+
+### Current Implementation ✅
+
+- [x] VAA signatures verified on NEAR via `wormhole.wormhole.testnet`
+- [x] Emitter chain validated (must be Arbitrum Sepolia = 10003)
+- [x] Emitter address validated (must match trusted emitter)
+- [x] Replay protection (processed VAA hashes tracked)
+
+### Production Recommendations
+
+- [ ] Deploy to mainnet (Arbitrum One + NEAR Mainnet)
+- [ ] Add rate limiting on NEAR contract
+- [ ] Multi-sig ownership for contract upgrades
+- [ ] Monitor certificate expiry dates
+- [ ] Add circuit breaker for emergencies
 
 ## Links
 
 - [Wormhole Docs](https://wormhole.com/docs/)
-- [Wormhole Contract Addresses](https://wormhole.com/docs/products/reference/contract-addresses/)
+- [Wormhole Contract Addresses](https://docs.wormhole.com/wormhole/reference/constants)
 - [Wormholescan Explorer](https://wormholescan.io/)
 - [Google X.509 Endpoint](https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com)
+- [Chainlink Automation](https://docs.chain.link/chainlink-automation)
+- [Chainlink Functions](https://docs.chain.link/chainlink-functions)
 - [NEAR Docs](https://docs.near.org/)
