@@ -1,13 +1,20 @@
 {
   "name": "google-cert-emitter-arbitrum",
-  "version": "1.0.0",
-  "description": "Arbitrum contract that emits Google cert snapshots via Wormhole",
+  "version": "2.0.0",
+  "description": "Arbitrum contract that emits Google cert snapshots via Wormhole + Chainlink Functions",
   "scripts": {
     "compile": "hardhat compile",
     "test": "hardhat test",
     "deploy:arbitrum": "hardhat run scripts/deploy.ts --network arbitrum",
     "deploy:sepolia": "hardhat run scripts/deploy.ts --network arbitrumSepolia",
+    "deploy:functions": "hardhat run scripts/deploy-functions-consumer.ts --network arbitrumSepolia",
+    "set-source": "hardhat run scripts/set-source.ts --network arbitrumSepolia",
+    "request-certs": "hardhat run scripts/request-certs.ts --network arbitrumSepolia",
+    "register-automation": "hardhat run scripts/register-automation.ts --network arbitrumSepolia",
     "verify": "hardhat verify --network arbitrum"
+  },
+  "dependencies": {
+    "@chainlink/contracts": "^1.1.0"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-toolbox": "^4.0.0",

@@ -175,15 +175,14 @@ impl GoogleCertOracle {
                 // Parse VAA and extract payload
                 let parsed = parse_vaa_body(&vaa);
                 
-                // Convert payload to string (it's JSON)
-                let snapshot_json = String::from_utf8(parsed.payload)
-                    .expect("Invalid UTF-8 payload");
+                // Payload is raw bytes (256-byte RSA modulus), store as hex
+                let rsa_modulus_hex = hex::encode(&parsed.payload);
                 
-                // Validate JSON format
-                let trimmed = snapshot_json.trim();
-                assert!(
-                    trimmed.starts_with('{') && trimmed.ends_with('}'),
-                    "Invalid JSON format in payload"
+                // Create JSON format for storage
+                let snapshot_json = format!(
+                    "{{\"rsa_modulus\":\"{}\",\"bytes\":{}}}",
+                    rsa_modulus_hex,
+                    parsed.payload.len()
                 );
                 
                 // Mark VAA as processed
