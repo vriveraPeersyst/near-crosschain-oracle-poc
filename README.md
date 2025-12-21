@@ -97,10 +97,8 @@ Google rotates their OAuth signing certificates every ~7 days. To verify Google-
 
 | Contract | Address |
 |----------|---------|
-| GoogleCertOracle | ⚠️ **Needs redeployment** (see note below) |
+| GoogleCertOracle | `googlecertoraclepoc.testnet` |
 | Wormhole Core | `wormhole.wormhole.testnet` |
-
-> **⚠️ NEAR Deployment Note**: The current account `ff94854f6edb59ea4f762f10899cc29ed9d8c37245a935a8673a166bcc4a9856` has a WASM deserialization conflict. You must **create a new NEAR testnet account** and deploy the contract there. The contract code is ready - only deployment and final relay are pending.
 
 ### Chainlink Services
 
@@ -188,18 +186,15 @@ Register at [automation.chain.link](https://automation.chain.link/arbitrum-sepol
 
 ### 4. Deploy NEAR Contract
 
-⚠️ **Important**: You must create a **new NEAR testnet account** for deployment. Reusing an existing account with previously deployed contracts can cause WASM deserialization conflicts.
-
 ```bash
-# Create a new NEAR testnet account at https://testnet.mynearwallet.com/
-# Or use near-cli:
+# Create a new NEAR testnet account
 near create-account your-new-account.testnet --useFaucet
 
 cd near-contract
-./build.sh
+./build.sh  # Uses cargo-near for proper WASM optimization
 
-# Deploy to the NEW account
-near deploy your-new-account.testnet ./target/wasm32-unknown-unknown/release/google_cert_oracle.wasm
+# Deploy contract
+near deploy your-new-account.testnet ./target/near/google_cert_oracle.wasm
 
 # Initialize with your Arbitrum contract as trusted emitter
 near call your-new-account.testnet new '{"owner": "your-new-account.testnet", "trusted_emitter": "0x4948Adae83B9f7A321A543744C4D97f3089163d9"}' --accountId your-new-account.testnet
@@ -243,13 +238,11 @@ Every 15 minutes, Chainlink Automation triggers `performUpkeep()`:
 3. NEAR calls `wormhole.wormhole.testnet` to verify signatures
 4. If valid, stores RSA modulus as hex string
 
-> **📋 Status**: VAA sequence 1 is signed and ready. Relay pending new NEAR contract deployment.
-
 ### Step 4: Read on NEAR
 
 ```bash
-near view ff94854f6edb59ea4f762f10899cc29ed9d8c37245a935a8673a166bcc4a9856 get_snapshot
-# Returns: {"rsa_modulus":"bd9e39e910f3ad...", "bytes":256}
+near view googlecertoraclepoc.testnet get_snapshot
+# Returns: {"rsa_modulus":"a8cb66e482dbd9fc...", "bytes":256}
 ```
 
 ## 🔧 Configuration
@@ -275,13 +268,8 @@ npx hardhat console --network arbitrumSepolia
 
 If you redeploy the Arbitrum contract:
 
-```javascript
-// Using near-api-js
-await account.functionCall({
-  contractId: 'ff94854f6edb59ea4f762f10899cc29ed9d8c37245a935a8673a166bcc4a9856',
-  methodName: 'set_trusted_emitter',
-  args: { emitter: '0xNewContractAddress' }
-});
+```bash
+near call googlecertoraclepoc.testnet set_trusted_emitter '{"emitter": "0xNewContractAddress"}' --accountId googlecertoraclepoc.testnet
 ```
 
 ## 💰 Cost Estimates
@@ -329,7 +317,9 @@ cd arbitrum
 npx hardhat run scripts/check-payload.ts --network arbitrumSepolia
 
 # NEAR - view stored snapshot
-near view ff94854f6edb59ea4f762f10899cc29ed9d8c37245a935a8673a166bcc4a9856 get_snapshot
+near view googlecertoraclepoc.testnet get_snapshot
+near view googlecertoraclepoc.testnet get_snapshot_count
+near view googlecertoraclepoc.testnet get_last_update_ts
 ```
 
 ## 📝 Data Format
